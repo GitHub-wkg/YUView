@@ -4,21 +4,23 @@ name: CI flatpak
 
 # Controls when the action will run. 
 on:
-  # Trigger the workflow if we merged into develop or if we create a release
-  # Since the workflow takes significantly longer (because of the ffmpeg build) we want to execute 
-  # this as little as possible.
-  push:
-    branches: [ develop ]
-  release:
-    branches: [ develop ]
-    types:
-      - created
-        
-  # Allows you to run this workflow manually from the Actions tab
+#   # Trigger the workflow if we merged into develop or if we create a release
+#   # Since the workflow takes significantly longer (because of the ffmpeg build) we want to execute
+#   # this as little as possible.
+#   push:
+#     branches: [ develop ]
+#   release:
+#     branches: [ develop ]
+#     types:
+#       - created
+#
+#   # Allows you to run this workflow manually from the Actions tab
+  # Keep the workflow valid while Linux builds are disabled.
   workflow_dispatch:
 
 jobs:
   flatpak-builder:
+    if: ${{ false }}
     name: "Flatpak Builder"
     runs-on: ubuntu-latest
     container:
@@ -39,4 +41,4 @@ jobs:
         asset_path: YUView.flatpak
         asset_name: YUView.flatpak
         asset_content_type: application/zip
-      if: github.event_name == 'release' 
+      if: github.event_name == 'release'
