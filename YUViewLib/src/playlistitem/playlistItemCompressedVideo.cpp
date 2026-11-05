@@ -600,6 +600,7 @@ void playlistItemCompressedVideo::drawItem(QPainter *painter,
 
 void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
 {
+  this->video->rawData_frameIndex = -1;
   if (caching && !this->cachingEnabled)
     return;
   if (!caching && this->loadingDecoder->state() == decoder::DecoderState::Error)
@@ -627,6 +628,9 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
   // Get the right decoder
   const auto dec         = caching ? this->cachingDecoder.get() : this->loadingDecoder.get();
   const auto curFrameIdx = caching ? this->currentFrameIdx[1] : this->currentFrameIdx[0];
+
+  auto &annexBFrameIndex = this->readAnnexBFrameCounterCodingOrder[caching ? 1 : 0];
+  auto &repushData       = this->repushData[caching ? 1 : 0];
 
   // Should we seek?
   if (curFrameIdx == -1 || frameIdx < curFrameIdx ||
@@ -666,11 +670,9 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
     {
       // Seek and update the frame counters. The seekToPosition function will update the
       // currentFrameIdx[] indices
-      this->readAnnexBFrameCounterCodingOrder = int(seekToFrame);
       DEBUG_COMPRESSED("playlistItemCompressedVideo::loadRawData seeking to frame "
-                       << seekToFrame << " PTS " << seekToDTS << " AnnexBCnt "
-                       << this->readAnnexBFrameCounterCodingOrder);
-      this->seekToPosition(this->readAnnexBFrameCounterCodingOrder, seekToDTS, caching);
+                       << seekToFrame << " PTS " << seekToDTS);
+      this->seekToPosition(int(seekToFrame), seekToDTS, caching);
     }
   }
 
@@ -703,7 +705,7 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
           if (ffmpegDec->state() != decoder::DecoderState::RetrieveFrames)
             // The decoder did not switch to decoding frame mode. Error.
             return;
-          this->repushData = true;
+          repushData = bool(pkt);
         }
       }
       else if (isInputFormatTypeAnnexB(this->inputFormat) &&
@@ -711,17 +713,16 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
       {
         // We are reading from a raw annexB file and use ffmpeg for decoding
         QByteArray data;
-        if (this->readAnnexBFrameCounterCodingOrder >= 0 &&
-            unsigned(this->readAnnexBFrameCounterCodingOrder) >=
-              this->inputFileAnnexBParser->getNumberPOCs())
+        if (annexBFrameIndex >= 0 &&
+            unsigned(annexBFrameIndex) >= this->inputFileAnnexBParser->getNumberPOCs())
         {
           DEBUG_COMPRESSED("playlistItemCompressedVideo::loadRawData EOF");
         }
         else
         {
           // Get the data of the next frame (which might be multiple NAL units)
-          auto frameStartEndFilePos = this->inputFileAnnexBParser->getFrameStartEndPos(
-            this->readAnnexBFrameCounterCodingOrder);
+          auto frameStartEndFilePos =
+            this->inputFileAnnexBParser->getFrameStartEndPos(annexBFrameIndex);
           Q_ASSERT_X(frameStartEndFilePos,
                      "playlistItemCompressedVideo::loadRawData",
                      "frameStartEndFilePos could not be retrieved. This should always work for a "
@@ -732,7 +733,7 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
           DEBUG_COMPRESSED(
             "playlistItemCompressedVideo::loadRawData retrieved frame data from file "
             "- AnnexBCnt "
-            << this->readAnnexBFrameCounterCodingOrder << " startEnd "
+            << annexBFrameIndex << " startEnd "
             << frameStartEndFilePos->first << "-" << frameStartEndFilePos->second << " - size "
             << data.size());
         }
@@ -747,11 +748,11 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
             break;
           }
           // Pushing the data failed because the ffmpeg decoder wants us to read frames first.
-          // Don't increase readAnnexBFrameCounterCodingOrder so that we will push the same data
+          // Don't increase annexBFrameIndex so that we will push the same data
           // again.
         }
         else
-          this->readAnnexBFrameCounterCodingOrder++;
+          annexBFrameIndex++;
       }
       else if (isInputFormatTypeAnnexB(this->inputFormat) &&
                this->decoderEngine != DecoderEngine::FFMpeg)
@@ -761,7 +762,7 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
         DEBUG_COMPRESSED(
           "playlistItemCompressedVideo::loadRawData retrieved nal unit from file - size "
           << data.size());
-        this->repushData = !dec->pushData(data);
+        repushData = !dec->pushData(data);
       }
       else if (isInputFormatTypeFFmpeg(this->inputFormat) &&
                this->decoderEngine != DecoderEngine::FFMpeg)
@@ -772,7 +773,7 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
         DEBUG_COMPRESSED(
           "playlistItemCompressedVideo::loadRawData retrieved nal unit from file - size "
           << data.size());
-        this->repushData = !dec->pushData(data);
+        repushData = !dec->pushData(data);
       }
       else
         assert(false);
@@ -791,13 +792,6 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
                          << (caching ? this->currentFrameIdx[1] : this->currentFrameIdx[0]));
         rightFrame =
           caching ? this->currentFrameIdx[1] == frameIdx : this->currentFrameIdx[0] == frameIdx;
-        if (rightFrame)
-        {
-          if (dec->statisticsEnabled())
-            this->statisticsData.setFrameIndex(frameIdx);
-          this->video->rawData            = dec->getRawFrameData();
-          this->video->rawData_frameIndex = frameIdx;
-        }
       }
     }
 
@@ -819,8 +813,16 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
       this->currentFrameIdx[1] = frameIdx;
     else
       this->currentFrameIdx[0] = frameIdx;
-    // Just set the frame number of the buffer to the current frame so that it will trigger a
-    // reload when the frame number changes.
+  }
+  else if (rightFrame)
+  {
+    if (dec->statisticsEnabled())
+    {
+      this->statisticsData.setFrameSize(dec->getFrameSize());
+      this->statisticsData.setFrameIndex(frameIdx);
+    }
+    this->video->rawData            = dec->getRawFrameData();
+    this->video->rawDataFrameSize   = dec->getFrameSize();
     this->video->rawData_frameIndex = frameIdx;
   }
   else if (this->loadingDecoder->state() == decoder::DecoderState::Error)
@@ -838,7 +840,8 @@ void playlistItemCompressedVideo::seekToPosition(int seekToFrame, int64_t seekTo
   // Do the seek
   auto dec = caching ? this->cachingDecoder.get() : this->loadingDecoder.get();
   dec->resetDecoder();
-  this->repushData               = false;
+  this->repushData[caching ? 1 : 0] = false;
+  this->readAnnexBFrameCounterCodingOrder[caching ? 1 : 0] = seekToFrame;
   this->decodingNotPossibleAfter = -1;
 
   // Retrieval of the raw metadata is only required if the the reader or the decoder is not ffmpeg

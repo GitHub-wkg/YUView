@@ -204,13 +204,13 @@ void videoHandler::drawFrame(QPainter *painter, int frameIdx, double zoomFactor,
   DEBUG_VIDEO(
     "videoHandler::drawFrame frameIdx %d currentImageIndex %d", frameIdx, currentImageIndex);
 
-  // Create the video QRect with the size of the sequence and center it.
+  // Cached and double-buffered frames retain their own dimensions.
+  currentImageSetMutex.lock();
+  const auto imageSize = currentImage.size();
   QRect videoRect;
-  videoRect.setSize(QSize(frameSize.width * zoomFactor, frameSize.height * zoomFactor));
+  videoRect.setSize(QSize(imageSize.width() * zoomFactor, imageSize.height() * zoomFactor));
   videoRect.moveCenter(QPoint(0, 0));
 
-  // Draw the current image (currentImage)
-  currentImageSetMutex.lock();
   painter->drawImage(videoRect, currentImage);
   currentImageSetMutex.unlock();
 

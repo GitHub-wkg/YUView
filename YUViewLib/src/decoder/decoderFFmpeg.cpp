@@ -106,8 +106,7 @@ decoderFFmpeg::decoderFFmpeg(FFmpeg::AVCodecParametersWrapper codecpar, bool cac
   if (!this->ff.loadingSuccessfull())
     return;
 
-  auto codecID    = this->ff.getCodecIDWrapper(codecpar.getCodecID());
-  this->codecName = codecID.getCodecName();
+  auto codecID = this->ff.getCodecIDWrapper(codecpar.getCodecID());
   if (!this->createDecoder(codecID, codecpar))
   {
     this->setError("Error creating the needed decoder.");
@@ -194,9 +193,7 @@ void decoderFFmpeg::copyCurImageToBuffer()
                           this->frameSize.height / pixFmt.getSubsamplingVer() * nrBytesPerSample;
     const auto nrBytes = nrBytesY + 2 * nrBytesC;
 
-    // Is the output big enough?
-    if (auto c = functions::clipToUnsigned(this->currentOutputBuffer.capacity()); c < nrBytes)
-      this->currentOutputBuffer.resize(nrBytes);
+    this->currentOutputBuffer.resize(nrBytes);
 
     // Copy line by line. The linesize of the source may be larger than the width of the frame.
     // This may be because the frame buffer is (8) byte aligned. Also the internal decoded
@@ -332,7 +329,11 @@ bool decoderFFmpeg::pushAVPacket(FFmpeg::AVPacketWrapper &pkt)
   if (!pkt)
   {
     DEBUG_FFMPEG("decoderFFmpeg::pushAVPacket: Received empty packet. Swithing to flushing.");
-    this->flushing     = true;
+    const auto result = this->ff.pushPacketToDecoder(this->decCtx, pkt);
+    if (result < 0 && result != AVERROR(EAGAIN) && result != AVERROR_EOF)
+      return this->setErrorB("Error flushing decoder (avcodec_send_packet)");
+
+    this->flushing     = result != AVERROR(EAGAIN);
     this->decoderState = DecoderState::RetrieveFrames;
     return false;
   }
@@ -398,11 +399,41 @@ bool decoderFFmpeg::decodeFrame()
                  << this->frame.getWidth() << "x" << this->frame.getHeight() << ") PTS"
                  << this->frame.getPTS() << "type" << this->frame.getPictType()
                  << (this->frame.getKeyFrame() ? "key frame" : ""));
-    // Checkt the size of the retrieved image
-    if (this->frameSize != this->frame.getSize())
+    const auto decodedSize = this->frame.getSize();
+    if (this->codecName == "h264" && this->rawFormat == video::RawFormat::YUV)
+    {
+      const auto decodedPixelFormat = this->frame.getPixelFormat();
+      if (decodedPixelFormat != this->framePixelFormat)
+      {
+        const auto decodedFormat =
+          this->ff.getAvPixFmtDescriptionFromAvPixelFormat(decodedPixelFormat);
+        if (decodedFormat.getRawFormat() != video::RawFormat::YUV ||
+            !(decodedFormat.getPixelFormatYUV() == this->formatYUV))
+          return this->setErrorB("Received an H.264 frame of different pixel format");
+
+        this->framePixelFormat = decodedPixelFormat;
+      }
+
+      if (this->frameSize != decodedSize)
+      {
+        if (!decodedSize.isValid() || !this->formatYUV.canConvertToRGB(decodedSize))
+          return this->setErrorB("Received an H.264 frame of unsupported size");
+
+        DEBUG_FFMPEG("decoderFFmpeg::decodeFrame H.264 resolution changed from "
+                     << this->frameSize.width << "x" << this->frameSize.height << " to "
+                     << decodedSize.width << "x" << decodedSize.height);
+        this->frameSize = decodedSize;
+      }
+    }
+    else if (this->frameSize != decodedSize)
       return this->setErrorB("Received a frame of different size");
     this->currentOutputBuffer.clear();
     return true;
+  }
+  else if (retRecieve == AVERROR_EOF || (retRecieve == AVERROR(EAGAIN) && this->flushing))
+  {
+    this->decoderState = DecoderState::EndOfBitstream;
+    DEBUG_FFMPEG("decoderFFmpeg::decodeFrame End of bitstream.");
   }
   else if (retRecieve < 0 && retRecieve != AVERROR(EAGAIN) && retRecieve != -35)
   {
@@ -412,17 +443,8 @@ bool decoderFFmpeg::decodeFrame()
   }
   else if (retRecieve == AVERROR(EAGAIN))
   {
-    if (this->flushing)
-    {
-      // There is no more data
-      this->decoderState = DecoderState::EndOfBitstream;
-      DEBUG_FFMPEG("decoderFFmpeg::decodeFrame End of bitstream.");
-    }
-    else
-    {
-      this->decoderState = DecoderState::NeedsMoreData;
-      DEBUG_FFMPEG("decoderFFmpeg::decodeFrame Need more data.");
-    }
+    this->decoderState = DecoderState::NeedsMoreData;
+    DEBUG_FFMPEG("decoderFFmpeg::decodeFrame Need more data.");
   }
   return false;
 }
@@ -441,6 +463,8 @@ void decoderFFmpeg::fillStatisticList(stats::StatisticsData &statisticsData) con
 bool decoderFFmpeg::createDecoder(FFmpeg::AVCodecIDWrapper         codecID,
                                   FFmpeg::AVCodecParametersWrapper codecpar)
 {
+  this->codecName = codecID.getCodecName();
+
   // Allocate the decoder context
   if (this->videoCodec)
     return this->setErrorB(QStringLiteral("Video codec already allocated."));
@@ -462,7 +486,8 @@ bool decoderFFmpeg::createDecoder(FFmpeg::AVCodecIDWrapper         codecID,
   // Get some parameters from the decoder context
   this->frameSize = decCtx.getSize();
 
-  auto ffmpegPixFormat = this->ff.getAvPixFmtDescriptionFromAvPixelFormat(decCtx.getPixelFormat());
+  this->framePixelFormat = decCtx.getPixelFormat();
+  auto ffmpegPixFormat = this->ff.getAvPixFmtDescriptionFromAvPixelFormat(this->framePixelFormat);
   this->rawFormat      = ffmpegPixFormat.getRawFormat();
   if (this->rawFormat == video::RawFormat::YUV)
     this->formatYUV = ffmpegPixFormat.getPixelFormatYUV();

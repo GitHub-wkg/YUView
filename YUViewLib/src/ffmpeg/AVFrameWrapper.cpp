@@ -174,6 +174,12 @@ Size AVFrameWrapper::getSize()
   return Size(width, height);
 }
 
+AVPixelFormat AVFrameWrapper::getPixelFormat()
+{
+  this->update();
+  return static_cast<AVPixelFormat>(this->format);
+}
+
 int AVFrameWrapper::getPTS()
 {
   this->update();

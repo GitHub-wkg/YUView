@@ -2714,8 +2714,8 @@ QStringPairList videoHandlerYUV::getPixelValues(const QPoint             &pixelP
         yuvItem2->currentFrameRawData_frameIndex != frameIdx1)
       return QStringPairList();
 
-    int width  = std::min(frameSize.width, yuvItem2->frameSize.width);
-    int height = std::min(frameSize.height, yuvItem2->frameSize.height);
+    int width  = std::min(currentRawFrameSize.width, yuvItem2->currentRawFrameSize.width);
+    int height = std::min(currentRawFrameSize.height, yuvItem2->currentRawFrameSize.height);
 
     if (pixelPos.x() < 0 || pixelPos.x() >= width || pixelPos.y() < 0 || pixelPos.y() >= height)
       return QStringPairList();
@@ -2763,8 +2763,8 @@ QStringPairList videoHandlerYUV::getPixelValues(const QPoint             &pixelP
   }
   else
   {
-    int width  = frameSize.width;
-    int height = frameSize.height;
+    int width  = currentRawFrameSize.width;
+    int height = currentRawFrameSize.height;
 
     // Do not get the pixel values if the buffer for the raw YUV values is out of date.
     if (currentFrameRawData_frameIndex != frameIdx)
@@ -2830,12 +2830,12 @@ void videoHandlerYUV::drawPixelValues(QPainter     *painter,
     return;
   }
 
-  auto       size          = frameSize;
+  auto       size          = currentRawFrameSize;
   const bool useDiffValues = (yuvItem2 != nullptr);
   if (useDiffValues)
     // If the two items are not of equal size, use the minimum possible size.
-    size = Size(std::min(frameSize.width, yuvItem2->frameSize.width),
-                std::min(frameSize.height, yuvItem2->frameSize.height));
+    size = Size(std::min(currentRawFrameSize.width, yuvItem2->currentRawFrameSize.width),
+                std::min(currentRawFrameSize.height, yuvItem2->currentRawFrameSize.height));
 
   // Check if the raw YUV values are up to date. If not, do not draw them. Do not trigger loading of
   // data here. The needsLoadingRawValues function will return that loading is needed. The caching
@@ -3200,7 +3200,7 @@ void videoHandlerYUV::loadFrame(int frameIndex, bool loadToDoubleBuffer)
     convertYUVToImage(this->currentFrameRawData,
                       newImage,
                       this->srcPixelFormat,
-                      this->frameSize,
+                      this->currentRawFrameSize,
                       this->conversionSettings);
     doubleBufferImage           = newImage;
     doubleBufferImageFrameIndex = frameIndex;
@@ -3211,7 +3211,7 @@ void videoHandlerYUV::loadFrame(int frameIndex, bool loadToDoubleBuffer)
     convertYUVToImage(this->currentFrameRawData,
                       newImage,
                       this->srcPixelFormat,
-                      this->frameSize,
+                      this->currentRawFrameSize,
                       this->conversionSettings);
     QMutexLocker setLock(&currentImageSetMutex);
     currentImage      = newImage;
@@ -3223,27 +3223,24 @@ void videoHandlerYUV::loadFrameForCaching(int frameIndex, QImage &frameToCache)
 {
   DEBUG_YUV("videoHandlerYUV::loadFrameForCaching " << frameIndex);
 
-  // Get the YUV format and the size here, so that the caching process does not crash if this
-  // changes.
   const auto yuvFormat          = this->srcPixelFormat;
-  const auto curFrameSize       = this->frameSize;
+  const auto sequenceSize       = this->frameSize;
   const auto conversionSettings = this->conversionSettings;
 
-  requestDataMutex.lock();
-  emit       signalRequestRawData(frameIndex, true);
-  QByteArray tmpBufferRawYUVDataCaching = rawData;
-  requestDataMutex.unlock();
-
-  if (frameIndex != rawData_frameIndex)
+  QMutexLocker lock(&requestDataMutex);
+  this->rawDataFrameSize = {};
+  emit signalRequestRawData(frameIndex, true);
+  if (frameIndex != rawData_frameIndex || rawData.isEmpty())
   {
-    // Loading failed
     DEBUG_YUV("videoHandlerYUV::loadFrameForCaching Loading failed");
     return;
   }
 
-  // Convert YUV to image. This can then be cached.
-  convertYUVToImage(
-    tmpBufferRawYUVDataCaching, frameToCache, yuvFormat, curFrameSize, conversionSettings);
+  const auto rawFrame = this->rawData;
+  const auto rawSize  = this->rawDataFrameSize.isValid() ? this->rawDataFrameSize : sequenceSize;
+  lock.unlock();
+
+  convertYUVToImage(rawFrame, frameToCache, yuvFormat, rawSize, conversionSettings);
 }
 
 // Load the raw YUV data for the given frame index into currentFrameRawData.
@@ -3258,6 +3255,7 @@ bool videoHandlerYUV::loadRawYUVData(int frameIndex)
   // The function loadFrameForCaching also uses the signalRequesRawYUVData to request raw data.
   // However, only one thread can use this at a time.
   requestDataMutex.lock();
+  this->rawDataFrameSize = {};
   emit signalRequestRawData(frameIndex, false);
 
   if (frameIndex != rawData_frameIndex || rawData.isEmpty())
@@ -3268,6 +3266,7 @@ bool videoHandlerYUV::loadRawYUVData(int frameIndex)
     return false;
   }
 
+  currentRawFrameSize            = rawDataFrameSize.isValid() ? rawDataFrameSize : frameSize;
   currentFrameRawData            = rawData;
   currentFrameRawData_frameIndex = frameIndex;
   requestDataMutex.unlock();
@@ -3279,15 +3278,15 @@ bool videoHandlerYUV::loadRawYUVData(int frameIndex)
 yuv_t videoHandlerYUV::getPixelValue(const QPoint &pixelPos) const
 {
   const PixelFormatYUV format = srcPixelFormat;
-  const int            w      = frameSize.width;
-  const int            h      = frameSize.height;
+  const int            w      = currentRawFrameSize.width;
+  const int            h      = currentRawFrameSize.height;
 
   yuv_t value = {0, 0, 0};
 
   if (auto predefinedFormat = format.getPredefinedFormat())
   {
     if (predefinedFormat == PredefinedPixelFormat::V210)
-      value = getPixelValueV210(currentFrameRawData, frameSize, pixelPos);
+      value = getPixelValueV210(currentFrameRawData, currentRawFrameSize, pixelPos);
   }
   else if (format.isPlanar())
   {
@@ -3594,12 +3593,12 @@ QImage videoHandlerYUV::calculateDifference(FrameHandler    *item2,
 
   // The items can be of different size (we then calculate the difference of the top left aligned
   // part)
-  const unsigned w_in[] = {frameSize.width, yuvItem2->frameSize.width};
-  const unsigned h_in[] = {frameSize.height, yuvItem2->frameSize.height};
+  const unsigned w_in[] = {currentRawFrameSize.width, yuvItem2->currentRawFrameSize.width};
+  const unsigned h_in[] = {currentRawFrameSize.height, yuvItem2->currentRawFrameSize.height};
   const auto     w_out  = std::min(w_in[0], w_in[1]);
   const auto     h_out  = std::min(h_in[0], h_in[1]);
   // Append a warning if the frame sizes are different
-  if (frameSize != yuvItem2->frameSize)
+  if (currentRawFrameSize != yuvItem2->currentRawFrameSize)
     differenceInfoList.append(
       InfoItem("Warning"sv,
                "The size of the two items differs.",

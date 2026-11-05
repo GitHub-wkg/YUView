@@ -204,6 +204,7 @@ private:
   // Load the raw YUV data for the given frame index into currentFrameRawYUVData.
   // Return false is loading failed.
   bool loadRawYUVData(int frameIndex);
+  Size currentRawFrameSize{};
 
   // Set the new pixel format thread save (lock the mutex). We should also emit that something
   // changed (can be disabled).

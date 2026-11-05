@@ -133,6 +133,7 @@ public:
   // A buffer with the raw RGB data (this is filled if signalRequestRawData() is emitted)
   QByteArray rawData;
   int        rawData_frameIndex{-1};
+  Size       rawDataFrameSize{}; // Optional size supplied with the requested raw frame.
 
   // Do we need to load the raw values (because they are drawn on screen?)
   // The videoHandler will draw the pixel values (drawPixelValues()) using the 8bit QImage

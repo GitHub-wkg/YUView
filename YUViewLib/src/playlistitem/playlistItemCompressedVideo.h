@@ -142,7 +142,7 @@ protected:
   std::unique_ptr<parser::ParserAnnexB> inputFileAnnexBParser;
   // When reading annex B data using the FileSourceAnnexBFile::getFrameData function, we need to
   // count how many frames we already read.
-  int readAnnexBFrameCounterCodingOrder{-1};
+  int readAnnexBFrameCounterCodingOrder[2]{-1, -1};
 
   // Which type is the input?
   InputFormat              inputFormat;
@@ -179,7 +179,7 @@ protected:
 
   // For certain decoders (FFmpeg or HM), pushing data may fail. The decoder may or may not switch
   // to retrieveing mode. In this case, we must re-push the packet for which pushing failed.
-  bool repushData{};
+  bool repushData[2]{};
 
   // Besides the normal stats (error / no error) this item might be able to parse the file but not
   // to decode it.

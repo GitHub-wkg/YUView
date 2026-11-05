@@ -55,6 +55,7 @@ public:
   int           getWidth();
   int           getHeight();
   Size          getSize();
+  AVPixelFormat getPixelFormat();
   int           getPTS();
   AVPictureType getPictType();
   int           getKeyFrame();

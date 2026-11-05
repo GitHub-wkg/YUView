@@ -107,7 +107,8 @@ protected:
   // An array of AV_INPUT_BUFFER_PADDING_SIZE zeros to be added as padding in pushData
   QByteArray avPacketPaddingData;
 
-  QString codecName{};
+  QString               codecName{};
+  FFmpeg::AVPixelFormat framePixelFormat{FFmpeg::AV_PIX_FMT_NONE};
 };
 
 } // namespace decoder
