@@ -73,6 +73,10 @@ public:
   }
   // Get a list of all cached frames (just the frame indices)
   virtual QList<int> getCachedFrames() const override;
+  virtual QImage loadFramePreview(int frameIndex)
+  {
+    return video->loadFramePreview(frameIndex);
+  }
   virtual int        getNumberCachedFrames() const override
   {
     return unresolvableError ? 0 : video->getNumberCachedFrames();

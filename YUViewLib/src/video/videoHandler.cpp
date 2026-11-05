@@ -296,6 +296,19 @@ unsigned videoHandler::getCachingFrameSize() const
   return this->frameSize.width * this->frameSize.height * bytes;
 }
 
+QImage videoHandler::loadFramePreview(int frameIndex)
+{
+  {
+    QMutexLocker lock(&imageCacheAccess);
+    if (cacheValid && imageCache.contains(frameIndex))
+      return imageCache.value(frameIndex);
+  }
+
+  QImage preview;
+  loadFrameForCaching(frameIndex, preview);
+  return preview;
+}
+
 QList<int> videoHandler::getCachedFrames() const
 {
   QMutexLocker lock(&imageCacheAccess);

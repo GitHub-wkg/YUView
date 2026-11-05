@@ -632,6 +632,8 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
   auto &annexBFrameIndex = this->readAnnexBFrameCounterCodingOrder[caching ? 1 : 0];
   auto &repushData       = this->repushData[caching ? 1 : 0];
 
+  auto &decodeFailure = caching ? this->cachingNotPossibleAfter : this->decodingNotPossibleAfter;
+
   // Should we seek?
   if (curFrameIdx == -1 || frameIdx < curFrameIdx ||
       frameIdx > curFrameIdx + FORWARD_SEEK_THRESHOLD)
@@ -744,7 +746,7 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
           {
             DEBUG_COMPRESSED("playlistItemCompressedVideo::loadRawData The decoder did not switch "
                              "to decoding frame mode. Error.");
-            this->decodingNotPossibleAfter = frameIdx;
+            decodeFailure = frameIdx;
             break;
           }
           // Pushing the data failed because the ffmpeg decoder wants us to read frames first.
@@ -800,12 +802,12 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
     {
       DEBUG_COMPRESSED("playlistItemCompressedVideo::loadRawData decoder neither needs more data "
                        "nor can decode frames");
-      this->decodingNotPossibleAfter = frameIdx;
+      decodeFailure = frameIdx;
       break;
     }
   }
 
-  if (this->decodingNotPossibleAfter >= 0 && frameIdx >= this->decodingNotPossibleAfter)
+  if (decodeFailure >= 0 && frameIdx >= decodeFailure)
   {
     // The specified frame (which is thoretically in the bitstream) can not be decoded.
     // Maybe the bitstream was cut at a position that it was not supposed to be cut at.
@@ -825,7 +827,7 @@ void playlistItemCompressedVideo::loadRawData(int frameIdx, bool caching)
     this->video->rawDataFrameSize   = dec->getFrameSize();
     this->video->rawData_frameIndex = frameIdx;
   }
-  else if (this->loadingDecoder->state() == decoder::DecoderState::Error)
+  else if (!caching && this->loadingDecoder->state() == decoder::DecoderState::Error)
   {
     this->infoText = "There was an error in the decoder: \n";
     this->infoText += this->loadingDecoder->decoderErrorString();
@@ -842,7 +844,10 @@ void playlistItemCompressedVideo::seekToPosition(int seekToFrame, int64_t seekTo
   dec->resetDecoder();
   this->repushData[caching ? 1 : 0] = false;
   this->readAnnexBFrameCounterCodingOrder[caching ? 1 : 0] = seekToFrame;
-  this->decodingNotPossibleAfter = -1;
+  if (caching)
+    this->cachingNotPossibleAfter = -1;
+  else
+    this->decodingNotPossibleAfter = -1;
 
   // Retrieval of the raw metadata is only required if the the reader or the decoder is not ffmpeg
   const bool bothFFmpeg =
@@ -1235,6 +1240,12 @@ void playlistItemCompressedVideo::cacheFrame(int frameIdx, bool testMode)
   this->cachingMutex.lock();
   this->video->cacheFrame(frameIdx, testMode);
   this->cachingMutex.unlock();
+}
+
+QImage playlistItemCompressedVideo::loadFramePreview(int frameIndex)
+{
+  QMutexLocker lock(&this->cachingMutex);
+  return this->video->loadFramePreview(frameIndex);
 }
 
 void playlistItemCompressedVideo::loadFrame(int  frameIdx,

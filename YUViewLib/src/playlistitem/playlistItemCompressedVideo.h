@@ -109,6 +109,7 @@ public:
   // For all compressed items, a mutex must be locked when caching a frame (only one frame can be
   // cached at a time because we only have one decoder).
   void cacheFrame(int idx, bool testMode) override;
+  QImage loadFramePreview(int frameIndex) override;
 
   // We only have one caching decoder so it is better if only one thread caches frames from this
   // item. This way, the frames will always be cached in the right order and no unnecessary decoding
@@ -193,6 +194,7 @@ protected:
   // If the bitstream is invalid (for example it was cut at a position that it should not be cut
   // at), we might be unable to decode some of the frames at the end of the sequence.
   int decodingNotPossibleAfter{-1};
+  int cachingNotPossibleAfter{-1};
 
 private slots:
   // Load the raw (YUV or RGB) data for the given frame index from file. This slot is called by the

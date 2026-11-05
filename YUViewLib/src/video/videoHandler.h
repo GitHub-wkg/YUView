@@ -63,6 +63,7 @@ public:
   void             cacheFrame(int frameIndex, bool testMode);
   virtual unsigned getCachingFrameSize() const;
   QList<int>       getCachedFrames() const;
+  QImage           loadFramePreview(int frameIndex);
   int              getNumberCachedFrames() const;
   bool             isInCache(int idx) const;
   virtual void     removeFrameFromCache(int frameIndex);
