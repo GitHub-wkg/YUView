@@ -236,6 +236,7 @@ ParserAnnexBAVC::parseAndAddNALUnit(int                                         
 
   std::optional<CurrentSliceData> currentSliceData;
 
+  bool        currentNalIsSlice = false;
   bool        currentSliceIntra = false;
   std::string currentSliceType;
   try
@@ -364,6 +365,7 @@ ParserAnnexBAVC::parseAndAddNALUnit(int                                         
 
       currentSliceIntra = isRandomAccess;
       currentSliceType  = to_string(newSliceHeader->slice_type);
+      currentNalIsSlice = true;
 
       DEBUG_AVC("ParserAnnexBAVC::parseAndAddNALUnit Parsed Slice ("
                 << NalTypeMapper.getName(nalAVC->header.nal_unit_type)
@@ -376,6 +378,7 @@ ParserAnnexBAVC::parseAndAddNALUnit(int                                         
         throw std::logic_error("No partition A slice header found.");
       auto slice = std::make_shared<slice_data_partition_b_layer_rbsp>();
       slice->parse(reader, this->currentAUPartitionASPS);
+      currentNalIsSlice = true;
       specificDescription     = " Slice Partition B";
       parseResult.nalTypeName = "Slice-PartB ";
     }
@@ -385,6 +388,7 @@ ParserAnnexBAVC::parseAndAddNALUnit(int                                         
         throw std::logic_error("No partition A slice header found.");
       auto slice = std::make_shared<slice_data_partition_c_layer_rbsp>();
       slice->parse(reader, this->currentAUPartitionASPS);
+      currentNalIsSlice = true;
       specificDescription     = " Slice Partition C";
       parseResult.nalTypeName = "Slice-PartC ";
     }
@@ -581,6 +585,7 @@ ParserAnnexBAVC::parseAndAddNALUnit(int                                         
     auto name = "NAL " + std::to_string(nalAVC->nalIdx) + ": " +
                 std::to_string(nalAVC->header.nalUnitTypeID) + specificDescription;
     nalRoot->setProperties(name);
+    nalRoot->setNalUnitIsSlice(currentNalIsSlice);
   }
 
   parseResult.success = true;

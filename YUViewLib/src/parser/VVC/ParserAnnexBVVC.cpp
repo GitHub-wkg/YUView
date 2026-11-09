@@ -555,6 +555,7 @@ ParserAnnexBVVC::parseAndAddNALUnit(int                                         
     auto name = "NAL " + std::to_string(nalVVC->nalIdx) + ": " +
                 std::to_string(nalVVC->header.nalUnitTypeID) + specificDescription.str();
     nalRoot->setProperties(name);
+    nalRoot->setNalUnitIsSlice(nalVVC->header.isSlice() && bool(nalVVC->rbsp));
   }
 
   return parseResult;

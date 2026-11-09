@@ -1,3 +1,4 @@
+find_package(Qt6 REQUIRED COMPONENTS Test)
 find_package(GTest CONFIG QUIET)
 if(NOT TARGET GTest::gtest)
   if(NOT EXISTS "${PROJECT_SOURCE_DIR}/submodules/googletest/CMakeLists.txt")
@@ -18,6 +19,6 @@ set_target_properties(YUViewUnitTest PROPERTIES
 target_include_directories(YUViewUnitTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   common)
-target_link_libraries(YUViewUnitTest PRIVATE YUViewLib GTest::gtest GTest::gmock)
+target_link_libraries(YUViewUnitTest PRIVATE YUViewLib Qt6::Test GTest::gtest GTest::gmock)
 
 add_test(NAME YUViewUnitTest COMMAND YUViewUnitTest)

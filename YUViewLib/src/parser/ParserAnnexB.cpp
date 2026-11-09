@@ -88,10 +88,14 @@ void ParserAnnexB::logNALSize(const ByteVector         &data,
                               std::shared_ptr<TreeItem> root,
                               std::optional<pairUint64> nalStartEndPos)
 {
+  root->setNalUnitInfo({nalStartEndPos ? std::optional<uint64_t>(nalStartEndPos->first)
+                                      : std::nullopt,
+                        {}, uint64_t(data.size()), false});
   size_t startCodeSize = 0;
-  if (data[0] == char(0) && data[1] == char(0) && data[2] == char(0) && data[3] == char(1))
+  if (data.size() >= 4 && data[0] == char(0) && data[1] == char(0) &&
+      data[2] == char(0) && data[3] == char(1))
     startCodeSize = 4;
-  if (data[0] == char(0) && data[1] == char(0) && data[2] == char(1))
+  if (data.size() >= 3 && data[0] == char(0) && data[1] == char(0) && data[2] == char(1))
     startCodeSize = 3;
 
   if (startCodeSize > 0)
@@ -308,6 +312,17 @@ vector<QTreeWidgetItem *> ParserAnnexB::createTreeItemsFromStreamInfo() const
   }
 
   return infoList;
+}
+
+NalUnitIndex::FrameRanges ParserAnnexB::getFrameByteRanges() const
+{
+  auto frames = this->frameListCodingOrder;
+  std::sort(frames.begin(), frames.end());
+  NalUnitIndex::FrameRanges ranges;
+  ranges.reserve(frames.size());
+  for (const auto &frame : frames)
+    ranges.push_back(frame.fileStartEndPos);
+  return ranges;
 }
 
 int ParserAnnexB::getFramePOC(FrameIndexDisplayOrder frameIdx)

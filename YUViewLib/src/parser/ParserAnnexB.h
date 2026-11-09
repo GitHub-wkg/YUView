@@ -66,6 +66,7 @@ public:
 
   // Clear all knowledge about the bitstream.
   void clearData();
+  NalUnitIndex::FrameRanges getFrameByteRanges() const override;
 
   vector<QTreeWidgetItem *> getStreamInfo() override { return createTreeItemsFromStreamInfo(); }
   unsigned int              getNrStreams() override { return 1; }

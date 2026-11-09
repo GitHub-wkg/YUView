@@ -247,6 +247,15 @@
     </widget>
    </widget>
   </widget>
+  <widget class="QDockWidget" name="streamViewerDock">
+   <property name="windowTitle">
+    <string>Stream Viewer</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>2</number>
+   </attribute>
+   <widget class="StreamViewerWidget" name="streamViewer"/>
+  </widget>
   <widget class="QDockWidget" name="cachingInfoDock">
    <property name="windowTitle">
     <string>Caching Info</string>
@@ -303,6 +312,12 @@
    <class>BitstreamAnalysisWidget</class>
    <extends>QWidget</extends>
    <header>ui/widgets/BitstreamAnalysisWidget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>StreamViewerWidget</class>
+   <extends>QWidget</extends>
+   <header>ui/widgets/StreamViewerWidget.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>

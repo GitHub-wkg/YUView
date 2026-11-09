@@ -37,12 +37,14 @@
 #include <QString>
 #include <QTreeWidgetItem>
 
+#include <atomic>
 #include <filesystem>
 #include <memory>
 
 #include "common/BitratePlotModel.h"
 #include "common/HRDPlotModel.h"
 #include "common/PacketItemModel.h"
+#include "common/NalUnitIndex.h"
 
 // If the file parsing limit is enabled (setParsingLimitEnabled) parsing will be aborted after
 // 500 frames have been parsed. This should be enough in most situations and full parsing can be
@@ -69,6 +71,8 @@ public:
 
   void updateNumberModelItems();
   void enableModel();
+  std::shared_ptr<TreeItem> getParsedTree() const { return packetModel->rootItem; }
+  virtual NalUnitIndex::FrameRanges getFrameByteRanges() const { return {}; }
 
   // Get info about the stream organized in a tree
   virtual vector<QTreeWidgetItem *> getStreamInfo() = 0;
@@ -109,8 +113,8 @@ protected:
 
   // If this variable is set (from an external thread), the parsing process should cancel
   // immediately
-  bool cancelBackgroundParser{false};
-  int  progressPercentValue{0};
+  std::atomic_bool cancelBackgroundParser{false};
+  std::atomic_int progressPercentValue{0};
   bool parsingLimitEnabled{false};
 
 private:

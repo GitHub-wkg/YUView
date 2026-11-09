@@ -59,6 +59,24 @@ MainWindow::MainWindow(bool useAlternativeSources, QWidget *parent) : QMainWindo
   qRegisterMetaType<indexRange>("indexRange");
 
   ui.setupUi(this);
+  ui.bitstreamAnalysis->setStreamViewer(ui.streamViewer);
+  connect(ui.streamViewerDock, &QDockWidget::visibilityChanged,
+          ui.bitstreamAnalysis, &BitstreamAnalysisWidget::setStreamViewerVisible);
+  connect(ui.playbackController, &PlaybackController::currentFrameChanged,
+          ui.streamViewer, &StreamViewerWidget::setCurrentFrame);
+  connect(ui.streamViewer, &StreamViewerWidget::frameSelected, this, [this](int frame)
+  {
+    const auto item = ui.playlistTreeWidget->getSelectedItems()[0];
+    if (!item || !item->properties().isIndexedByFrame())
+      return;
+    const auto range = item->properties().startEndRange;
+    if (frame < range.first || frame > range.second)
+      return;
+    ui.playbackController->pausePlayback();
+    ui.playbackController->setCurrentFrameAndUpdate(frame);
+  });
+  connect(ui.playlistTreeWidget, &PlaylistTreeWidget::itemAboutToBeDeleted,
+          ui.bitstreamAnalysis, &BitstreamAnalysisWidget::itemAboutToBeDeleted);
 
   // Create the update handler
   updater.reset(new updateHandler(this, useAlternativeSources));
@@ -68,7 +86,7 @@ MainWindow::MainWindow(bool useAlternativeSources, QWidget *parent) : QMainWindo
   statusBar()->hide();
 
   saveWindowsStateOnExit = true;
-  for (int i = 0; i < 5; i++)
+  for (int i = 0; i < 6; i++)
     panelsVisible[i] = false;
 
   // Initialize the separate window
@@ -372,6 +390,7 @@ void MainWindow::createMenusAndActions()
   addDockViewAction(ui.propertiesDock, "Show &Properties", Qt::CTRL | Qt::Key_P);
   addDockViewAction(ui.fileInfoDock, "Show &Info", Qt::CTRL | Qt::Key_I);
   addDockViewAction(ui.cachingInfoDock, "Show Caching Info");
+  addDockViewAction(ui.streamViewerDock, tr("Show Stream Viewer"));
   viewMenu->addSeparator();
   addDockViewAction(ui.playbackControllerDock, "Show Playback &Controls", Qt::CTRL | Qt::Key_D);
 
@@ -698,6 +717,8 @@ void MainWindow::toggleFullscreen()
       ui.fileInfoDock->show();
     if (panelsVisible[4])
       ui.cachingInfoDock->show();
+    if (panelsVisible[5])
+      ui.streamViewerDock->show();
 
     if (!is_Q_OS_MACOS)
       ui.menuBar->show();
@@ -718,6 +739,7 @@ void MainWindow::toggleFullscreen()
     panelsVisible[2] = ui.playbackControllerDock->isVisible();
     panelsVisible[3] = ui.fileInfoDock->isVisible();
     panelsVisible[4] = ui.cachingInfoDock->isVisible();
+    panelsVisible[5] = ui.streamViewerDock->isVisible();
 
     // Hide panels
     ui.propertiesDock->hide();
@@ -727,6 +749,7 @@ void MainWindow::toggleFullscreen()
       ui.playbackControllerDock->hide();
     ui.fileInfoDock->hide();
     ui.cachingInfoDock->hide();
+    ui.streamViewerDock->hide();
 
     if (!is_Q_OS_MACOS)
       ui.menuBar->hide();
@@ -957,6 +980,7 @@ void MainWindow::resetWindowLayout()
   ui.playbackControllerDock->setFloating(false);
   ui.fileInfoDock->setFloating(false);
   ui.cachingInfoDock->setFloating(false);
+  ui.streamViewerDock->setFloating(false);
 
   // show the menu bar
   if (!is_Q_OS_MACOS)
@@ -976,6 +1000,9 @@ void MainWindow::resetWindowLayout()
       "006500720044006f0063006b01000000000000048f000001460007ffff000002b800000348000000040000000400"
       "00000800000008fc00000000");
   restoreState(mainWindowState);
+  addDockWidget(Qt::RightDockWidgetArea, ui.streamViewerDock);
+  ui.streamViewerDock->show();
+  resizeDocks({ui.streamViewerDock}, {500}, Qt::Horizontal);
 
   // Set the size/position of the main window
   setGeometry(0, 0, 1100, 750);

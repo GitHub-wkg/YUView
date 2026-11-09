@@ -422,6 +422,7 @@ void PlaybackController::currentSelectedItemsChanged(playlistItem *item1,
                    this->frameSlider->maximum());
   }
   ui.frameBrowser->setItem(item1, currentFrameIdx);
+  emit currentFrameChanged(currentFrameIdx);
 }
 
 void PlaybackController::selectionPropertiesChanged(bool redraw)
@@ -680,6 +681,7 @@ bool PlaybackController::setCurrentFrameAndUpdate(int frame, bool updateView)
   this->updateFrameSliderAndSpinBoxWithoutSignals(frame);
   this->currentFrameIdx = frame;
   ui.frameBrowser->setCurrentFrame(frame);
+  emit currentFrameChanged(frame);
 
   if (updateView)
   {

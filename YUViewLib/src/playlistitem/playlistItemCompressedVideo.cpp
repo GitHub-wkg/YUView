@@ -1216,6 +1216,7 @@ void playlistItemCompressedVideo::getSupportedFileExtensions(QStringList &allExt
 
 void playlistItemCompressedVideo::reloadItemSource()
 {
+  emit sourceReloadStarted();
   // TODO: The caching decoder must also be reloaded
   //       All items in the cache are also now invalid
 
@@ -1229,6 +1230,7 @@ void playlistItemCompressedVideo::reloadItemSource()
   // Load frame 0. This will decode the first frame in the sequence and set the
   // correct frame size/YUV format.
   loadRawData(0, false);
+  emit sourceReloaded();
 }
 
 void playlistItemCompressedVideo::cacheFrame(int frameIdx, bool testMode)

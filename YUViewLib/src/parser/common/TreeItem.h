@@ -32,6 +32,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -42,6 +43,24 @@
 class TreeItem : public std::enable_shared_from_this<TreeItem>
 {
 public:
+  struct NalUnitInfo
+  {
+    std::optional<uint64_t> fileOffset;
+    std::optional<uint64_t> packetOffset;
+    uint64_t byteSize{};
+    bool isSlice{};
+  };
+
+  void setNalUnitInfo(NalUnitInfo info) { this->nalUnitInfo = info; }
+  const std::optional<NalUnitInfo> &getNalUnitInfo() const { return this->nalUnitInfo; }
+  void setNalUnitIsSlice(bool slice)
+  {
+    if (this->nalUnitInfo)
+      this->nalUnitInfo->isSlice = slice;
+  }
+  void setPresentationTimestamp(int64_t pts) { this->presentationTimestamp = pts; }
+  std::optional<int64_t> getPresentationTimestamp() const { return this->presentationTimestamp; }
+
   TreeItem()  = default;
   ~TreeItem() = default;
 
@@ -162,6 +181,9 @@ private:
   std::string coding;
   std::string code;
   std::string meaning;
+
+  std::optional<NalUnitInfo> nalUnitInfo;
+  std::optional<int64_t> presentationTimestamp;
 
   bool error{};
   // This is set for the first layer items in case of AVPackets

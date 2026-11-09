@@ -123,6 +123,7 @@ public slots:
   void updatePlayPauseButtonIcon();
 
 signals:
+  void currentFrameChanged(int frame);
   void ControllerStartCachingCurrentSelection(indexRange range);
   void ControllerRemoveFromCache(indexRange range);
 

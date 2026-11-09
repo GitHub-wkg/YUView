@@ -41,6 +41,7 @@
 #include <QtConcurrent>
 
 #include "ui_bitstreamAnalysisWidget.h"
+#include "StreamViewerWidget.h"
 class BitstreamAnalysisWidget : public QWidget
 {
   Q_OBJECT
@@ -50,6 +51,9 @@ public:
   ~BitstreamAnalysisWidget() { stopAndDeleteParserBlocking(); }
 
   MoveAndZoomableView *getCurrentActiveView();
+  void setStreamViewer(StreamViewerWidget *viewer) { streamViewer = viewer; }
+  void setStreamViewerVisible(bool visible);
+  void itemAboutToBeDeleted(playlistItem *item);
 
 public slots:
   void currentSelectedItemsChanged(playlistItem *item1, playlistItem *item2, bool chageByPlayback);
@@ -61,7 +65,11 @@ private slots:
   void backgroundParsingDone(QString error);
 
   void showOnlyStreamComboBoxIndexChanged(int index);
-  void colorCodeStreamsCheckBoxToggled(bool state) { this->parser->setStreamColorCoding(state); }
+  void colorCodeStreamsCheckBoxToggled(bool state)
+  {
+    if (this->parser)
+      this->parser->setStreamColorCoding(state);
+  }
   void parseEntireBitstreamCheckBoxToggled(bool) { this->restartParsingOfCurrentItem(); }
   void bitratePlotOrderComboBoxIndexChanged(int index);
 
@@ -82,7 +90,13 @@ private:
 
   std::unique_ptr<parser::Parser> parser;
   QFuture<void>                   backgroundParserFuture;
-  void                            backgroundParsingFunction();
+  void backgroundParsingFunction(parser::Parser *activeParser,
+                                 const std::filesystem::path &fileName);
+  QPointer<StreamViewerWidget> streamViewer;
+  bool streamViewerVisible{};
+  uint64_t parserGeneration{};
+  QMetaObject::Connection sourceReloadStartedConnection;
+  QMetaObject::Connection sourceReloadedConnection;
 
   QPointer<playlistItemCompressedVideo> currentCompressedVideo;
 

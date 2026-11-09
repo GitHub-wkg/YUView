@@ -658,6 +658,7 @@ ParserAnnexBHEVC::parseAndAddNALUnit(int                                        
     auto name = "NAL " + std::to_string(nalHEVC->nalIdx) + ": " +
                 std::to_string(nalHEVC->header.nalUnitTypeID) + specificDescription.str();
     nalRoot->setProperties(name);
+    nalRoot->setNalUnitIsSlice(nalHEVC->header.isSlice() && bool(nalHEVC->rbsp));
   }
 
   parseResult.success = true;

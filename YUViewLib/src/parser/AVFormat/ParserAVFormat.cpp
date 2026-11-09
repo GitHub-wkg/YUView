@@ -45,6 +45,7 @@
 #include "DecoderConfigurationLhvC.h"
 #include "parser/common/SubByteReaderLogging.h"
 #include <parser/common/Functions.h>
+#include <parser/common/NalUnitRanges.h>
 
 #define PARSERAVCFORMAT_DEBUG_OUTPUT 0
 #if PARSERAVCFORMAT_DEBUG_OUTPUT && !NDEBUG
@@ -146,6 +147,7 @@ bool ParserAVFormat::parseExtradataAVC(const ByteVector &extradata)
 
   if (extradata.at(0) == 1 && extradata.size() >= 7)
   {
+    this->lengthPrefixedNals = true;
     SubByteReaderLogging reader(extradata, packetModel->rootItem, "Extradata (Raw AVC NAL units)");
     reader.disableEmulationPrevention();
 
@@ -156,7 +158,7 @@ bool ParserAVFormat::parseExtradataAVC(const ByteVector &extradata)
     reader.readBits("profile_compat", 8);
     reader.readBits("level", 8);
     reader.readBits("reserved_6_one_bits", 6);
-    reader.readBits("nal_size_length_minus1", 2);
+    this->nalLengthSize = unsigned(reader.readBits("nal_size_length_minus1", 2)) + 1;
     reader.readBits("reserved_3_one_bits", 3);
     auto number_of_sps = reader.readBits("number_of_sps", 5);
 
@@ -195,6 +197,7 @@ bool ParserAVFormat::parseExtradataHEVC(const ByteVector &extradata, const HEVCE
 
   if (extradata.at(0) == 1)
   {
+    this->lengthPrefixedNals = true;
     auto hevcParser = dynamic_cast<ParserAnnexBHEVC *>(this->annexBParser.get());
     if (!hevcParser)
       return false;
@@ -205,11 +208,13 @@ bool ParserAVFormat::parseExtradataHEVC(const ByteVector &extradata, const HEVCE
       {
         avformat::DecoderConfigurationHvcC hvcC;
         hvcC.parse(extradata, packetModel->rootItem, hevcParser, this->bitratePlotModel.get());
+        this->nalLengthSize = hvcC.lengthSizeMinusOne + 1;
       }
       else if (type == HEVCExtradataType::lhvC)
       {
         avformat::DecoderConfigurationLhvC lhvC;
         lhvC.parse(extradata, packetModel->rootItem, hevcParser, this->bitratePlotModel.get());
+        this->nalLengthSize = lhvC.lengthSizeMinusOne + 1;
       }
     }
     catch (...)
@@ -265,57 +270,34 @@ std::map<std::string, unsigned> ParserAVFormat::parseByteVectorAnnexBStartCodes(
     return {};
   }
 
-  auto getNextNalStart = [&data, &dataFormat](ByteVector::const_iterator searchStart)
-  {
-    if (dataFormat == PacketDataFormat::RawNAL)
-    {
-      if (std::distance(searchStart, data.end()) <= 3)
-        return data.end();
-      auto itStartCode =
-          std::search(searchStart + 3, data.end(), startCode.begin(), startCode.end());
-      if (itStartCode == data.end())
-        return data.end();
-      return itStartCode;
-    }
-    else if (dataFormat == PacketDataFormat::MP4)
-    {
-      int size = 0;
-      size += ((*(searchStart++)) << 24);
-      size += ((*(searchStart++)) << 16);
-      size += ((*(searchStart++)) << 8);
-      size += (*(searchStart++));
-      if (size > std::distance(searchStart, data.end()))
-        return data.end();
-      return searchStart + size;
-    }
-    return searchStart;
-  };
-
-  auto itStartCode = data.begin();
-  if (dataFormat == PacketDataFormat::RawNAL)
-  {
-    itStartCode = getNextNalStart(itStartCode);
-    if (itStartCode == data.end())
-    {
-      DEBUG_AVFORMAT(
-          "ParserAVFormat::parseByteVectorAnnexBStartCodes Not a single start code could be "
-          "found in the data. Are you sure the data format is correct?");
-      return {};
-    }
-  }
-
-  const auto sizeStartCode = (dataFormat == PacketDataFormat::RawNAL ? 3u : 4u);
-
-  auto                            nalID = 0u;
+  auto nalID = 0u;
   std::map<std::string, unsigned> naNames;
-  while (itStartCode != data.end())
+  for (const auto &range : splitNalUnits(data, dataFormat == PacketDataFormat::RawNAL,
+                                         this->nalLengthSize))
   {
-    auto itNextStartCode = getNextNalStart(itStartCode);
-    auto nalData         = ByteVector(itStartCode + sizeStartCode, itNextStartCode);
+    if (!range.complete)
+    {
+      auto error = item->createChildItem("NAL " + std::to_string(nalID++) +
+          ": incomplete NAL length or payload", {}, {}, {}, {}, true);
+      error->setNalUnitInfo({{}, uint64_t(range.offset), uint64_t(range.end - range.offset), false});
+      continue;
+    }
+    auto nalData = ByteVector(data.begin() + range.payloadOffset, data.begin() + range.end);
     try
     {
+      const auto firstChild = item->getNrChildItems();
       auto parseResult =
           this->annexBParser->parseAndAddNALUnit(nalID++, nalData, packetBitrateEntry, {}, item);
+      for (auto child = firstChild; child < item->getNrChildItems(); ++child)
+      {
+        const auto unit = item->getChild(unsigned(child));
+        if (unit->getNalUnitInfo())
+        {
+          auto info = *unit->getNalUnitInfo();
+          info.packetOffset = uint64_t(range.offset);
+          unit->setNalUnitInfo(info);
+        }
+      }
       if (parseResult.success && parseResult.bitrateEntry)
         this->bitratePlotModel->addBitratePoint(this->videoStreamIndex, *parseResult.bitrateEntry);
       if (parseResult.success && parseResult.nalTypeName)
@@ -325,7 +307,6 @@ std::map<std::string, unsigned> ParserAVFormat::parseByteVectorAnnexBStartCodes(
     {
       DEBUG_AVFORMAT("ParserAVFormat::parseByteVectorAnnexBStartCodes Parsing of NAL failed");
     }
-    itStartCode = itNextStartCode;
   }
   return naNames;
 }
@@ -392,6 +373,8 @@ bool ParserAVFormat::parseAVPacket(unsigned         packetID,
   itemTree->createChildItem("data_size", packet.getDataSize());
 
   itemTree->setStreamIndex(packet.getStreamIndex());
+  if (packet.getPacketType() == PacketType::VIDEO)
+    itemTree->setPresentationTimestamp(packet.getPTS());
 
   if (packet.getPacketType() == PacketType::VIDEO && (this->annexBParser || this->obuParser))
   {
@@ -401,7 +384,8 @@ bool ParserAVFormat::parseAVPacket(unsigned         packetID,
     if (this->annexBParser)
     {
       // Colloect the types of NALs to create a good name later
-      auto                           packetFormat = packet.guessDataFormatFromData();
+      auto packetFormat = this->lengthPrefixedNals ? PacketDataFormat::MP4
+                                                   : packet.guessDataFormatFromData();
       BitratePlotModel::BitrateEntry packetBitrateEntry;
       packetBitrateEntry.dts      = packet.getDTS();
       packetBitrateEntry.pts      = packet.getPTS();

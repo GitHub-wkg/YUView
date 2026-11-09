@@ -118,6 +118,10 @@ public:
 
   InputFormat getInputFormat() const { return this->inputFormat; }
 
+signals:
+  void sourceReloadStarted();
+  void sourceReloaded();
+
 protected:
   virtual void createPropertiesWidget() override;
 

@@ -38,6 +38,13 @@
 #include "parser/Mpeg2/ParserAnnexBMpeg2.h"
 #include "parser/VVC/ParserAnnexBVVC.h"
 
+#include <QLoggingCategory>
+
+namespace
+{
+Q_LOGGING_CATEGORY(bitstreamLog, "yuview.bitstream", QtInfoMsg)
+}
+
 #define BITSTREAM_ANALYSIS_WIDGET_DEBUG_OUTPUT 0
 #if BITSTREAM_ANALYSIS_WIDGET_DEBUG_OUTPUT
 #include <QDebug>
@@ -49,6 +56,7 @@
 BitstreamAnalysisWidget::BitstreamAnalysisWidget(QWidget *parent) : QWidget(parent)
 {
   this->ui.setupUi(this);
+  this->ui.parseEntireFileCheckBox->setChecked(true);
   this->ui.streamInfoTreeWidget->setColumnWidth(0, 300);
   this->updateParsingStatusText(-1);
 
@@ -86,7 +94,8 @@ void BitstreamAnalysisWidget::updateParserItemModel()
 {
   if (this->parser)
   {
-    this->parser->updateNumberModelItems();
+    if (this->backgroundParserFuture.isFinished())
+      this->parser->updateNumberModelItems();
     this->updateParsingStatusText(this->parser->getParsingProgressPercent());
   }
 }
@@ -128,11 +137,26 @@ void BitstreamAnalysisWidget::updateStreamInfo()
 
 void BitstreamAnalysisWidget::backgroundParsingDone(QString error)
 {
-  if (error.isEmpty())
-    this->ui.parsingStatusText->setText("Parsing done.");
-  else
-    this->ui.parsingStatusText->setText("Error parsing the file: " + error);
+  if (!this->parser)
+    return;
+  // A completed tree is shared read-only with the Stream Viewer.
+  this->backgroundParserFuture.waitForFinished();
+  this->parser->updateNumberModelItems();
+  this->updateStreamInfo();
   this->updateParsingStatusText(100);
+  if (this->streamViewer)
+  {
+    this->streamViewer->setTree(this->parser->getParsedTree(),
+                                this->parser->getFrameByteRanges(),
+                                this->parser->getVideoStreamIndex());
+  }
+  if (!error.isEmpty())
+  {
+    qCWarning(bitstreamLog) << "Bitstream parsing failed:" << error;
+    this->ui.parsingStatusText->setText(tr("Error parsing the file: %1").arg(error));
+  }
+  if (this->streamViewer)
+    this->streamViewer->setStatusText(this->ui.parsingStatusText->text());
 }
 
 void BitstreamAnalysisWidget::showOnlyStreamComboBoxIndexChanged(int index)
@@ -163,45 +187,81 @@ void BitstreamAnalysisWidget::updateParsingStatusText(int progressValue)
     this->ui.parsingStatusText->setText(
         parsingLimitSet ? "Partial parsing done. Enable full parsing if needed." : "Parsing done.");
   }
+  if (this->streamViewer)
+    this->streamViewer->setStatusText(this->ui.parsingStatusText->text());
 }
 
 void BitstreamAnalysisWidget::stopAndDeleteParserBlocking()
 {
+  ++this->parserGeneration; // Reject already queued updates from an earlier source.
   if (!this->parser)
     return;
-
-  this->disconnect(this->parser.get(),
-                   &parser::Parser::modelDataUpdated,
-                   this,
-                   &BitstreamAnalysisWidget::updateParserItemModel);
-  this->disconnect(this->parser.get(),
-                   &parser::Parser::streamInfoUpdated,
-                   this,
-                   &BitstreamAnalysisWidget::updateStreamInfo);
-  this->disconnect(this->parser.get(),
-                   &parser::Parser::backgroundParsingDone,
-                   this,
-                   &BitstreamAnalysisWidget::backgroundParsingDone);
-
+  disconnect(this->parser.get(), nullptr, this, nullptr);
   if (this->backgroundParserFuture.isRunning())
   {
-    DEBUG_ANALYSIS("BitstreamAnalysisWidget::stopAndDeleteParser stopping parser");
+    qCInfo(bitstreamLog) << "Stopping background bitstream parsing";
     this->parser->setAbortParsing();
     this->backgroundParserFuture.waitForFinished();
   }
+  if (this->streamViewer)
+    this->streamViewer->clear();
+  this->ui.dataTreeView->setModel(nullptr);
+  this->ui.plotViewWidget->setModel(nullptr);
+  this->ui.hrdPlotWidget->setModel(nullptr);
   this->parser.reset();
-  DEBUG_ANALYSIS("BitstreamAnalysisWidget::stopAndDeleteParser parser stopped and deleted");
 }
 
-void BitstreamAnalysisWidget::backgroundParsingFunction()
+void BitstreamAnalysisWidget::backgroundParsingFunction(parser::Parser *activeParser,
+                                                        const std::filesystem::path &fileName)
 {
-  if (this->parser)
-    this->parser->runParsingOfFile(this->currentCompressedVideo->properties().name.toStdString());
+  try
+  {
+    if (!activeParser->runParsingOfFile(fileName))
+      emit activeParser->backgroundParsingDone(tr("Unable to finish parsing the bitstream."));
+  }
+  catch (const std::exception &error)
+  {
+    emit activeParser->backgroundParsingDone(QString::fromUtf8(error.what()));
+  }
+  catch (...)
+  {
+    emit activeParser->backgroundParsingDone(tr("Unknown bitstream parsing error."));
+  }
+}
+
+void BitstreamAnalysisWidget::setStreamViewerVisible(bool visible)
+{
+  this->streamViewerVisible = visible;
+  if (visible && !this->parser)
+    this->restartParsingOfCurrentItem();
+  else if (!visible && !this->isVisible())
+    this->stopAndDeleteParserBlocking();
+}
+
+void BitstreamAnalysisWidget::itemAboutToBeDeleted(playlistItem *item)
+{
+  if (this->currentCompressedVideo == item)
+    this->currentSelectedItemsChanged(nullptr, nullptr, false);
 }
 
 void BitstreamAnalysisWidget::currentSelectedItemsChanged(playlistItem *item1, playlistItem *, bool)
 {
-  this->currentCompressedVideo = dynamic_cast<playlistItemCompressedVideo *>(item1);
+  auto source = dynamic_cast<playlistItemCompressedVideo *>(item1);
+  if (this->currentCompressedVideo == source && this->parser)
+    return;
+  this->stopAndDeleteParserBlocking();
+  disconnect(this->sourceReloadStartedConnection);
+  disconnect(this->sourceReloadedConnection);
+  this->currentCompressedVideo = source;
+  if (source)
+  {
+    this->sourceReloadStartedConnection = connect(source,
+        &playlistItemCompressedVideo::sourceReloadStarted, this,
+        &BitstreamAnalysisWidget::stopAndDeleteParserBlocking);
+    this->sourceReloadedConnection = connect(source,
+        &playlistItemCompressedVideo::sourceReloaded, this,
+        &BitstreamAnalysisWidget::restartParsingOfCurrentItem);
+  }
   this->ui.streamInfoTreeWidget->clear();
 
   const bool isBitstream = !this->currentCompressedVideo.isNull();
@@ -220,13 +280,9 @@ void BitstreamAnalysisWidget::updateSettings()
 
 void BitstreamAnalysisWidget::restartParsingOfCurrentItem()
 {
-  if (!this->isVisible())
-  {
-    DEBUG_ANALYSIS("BitstreamAnalysisWidget::restartParsingOfCurrentItem not visible - abort");
-    return;
-  }
-
   this->stopAndDeleteParserBlocking();
+  if (!this->isVisible() && !this->streamViewerVisible)
+    return;
 
   if (this->currentCompressedVideo.isNull())
   {
@@ -241,6 +297,14 @@ void BitstreamAnalysisWidget::restartParsingOfCurrentItem()
   }
 
   this->createAndConnectNewParser(this->currentCompressedVideo->getInputFormat());
+  if (!this->parser)
+  {
+    const auto message = tr("Bitstream analysis is not supported for this input format.");
+    this->ui.parsingStatusText->setText(message);
+    if (this->streamViewer)
+      this->streamViewer->setStatusText(message);
+    return;
+  }
 
   this->ui.dataTreeView->setModel(this->parser->getPacketItemModel());
   this->ui.dataTreeView->setColumnWidth(0, 600);
@@ -252,8 +316,13 @@ void BitstreamAnalysisWidget::restartParsingOfCurrentItem()
   this->updateStreamInfo();
 
   this->updateParsingStatusText(0);
-  this->backgroundParserFuture =
-      QtConcurrent::run([=](BitstreamAnalysisWidget *b) { b->backgroundParsingFunction(); }, this);
+  const auto fileName = std::filesystem::u8path(this->currentCompressedVideo->properties().name.toUtf8().constData());
+  qCInfo(bitstreamLog) << "Starting NAL parsing for" << this->currentCompressedVideo->properties().name;
+  auto activeParser = this->parser.get();
+  this->backgroundParserFuture = QtConcurrent::run([this, activeParser, fileName]
+  {
+    this->backgroundParsingFunction(activeParser, fileName);
+  });
   DEBUG_ANALYSIS(
       "BitstreamAnalysisWidget::restartParsingOfCurrentItem new parser created and started");
 }
@@ -264,40 +333,49 @@ void BitstreamAnalysisWidget::createAndConnectNewParser(InputFormat inputFormat)
       !this->parser, Q_FUNC_INFO, "Error reinitlaizing parser. The current parser is not null.");
   if (inputFormat == InputFormat::AnnexBHEVC)
     this->parser.reset(new parser::ParserAnnexBHEVC(this));
-  if (inputFormat == InputFormat::AnnexBVVC)
+  else if (inputFormat == InputFormat::AnnexBVVC)
     this->parser.reset(new parser::ParserAnnexBVVC(this));
   else if (inputFormat == InputFormat::AnnexBAVC)
     this->parser.reset(new parser::ParserAnnexBAVC(this));
   else if (inputFormat == InputFormat::Libav)
     this->parser.reset(new parser::ParserAVFormat(this));
+  if (!this->parser)
+    return;
   this->parser->enableModel();
   const bool parsingLimitSet = !this->ui.parseEntireFileCheckBox->isChecked();
   this->parser->setParsingLimitEnabled(parsingLimitSet);
 
-  this->connect(this->parser.get(),
-                &parser::Parser::modelDataUpdated,
-                this,
-                &BitstreamAnalysisWidget::updateParserItemModel);
-  this->connect(this->parser.get(),
-                &parser::Parser::streamInfoUpdated,
-                this,
-                &BitstreamAnalysisWidget::updateStreamInfo);
-  this->connect(this->parser.get(),
-                &parser::Parser::backgroundParsingDone,
-                this,
-                &BitstreamAnalysisWidget::backgroundParsingDone);
+  const auto generation = this->parserGeneration;
+  connect(this->parser.get(), &parser::Parser::modelDataUpdated, this, [this, generation]
+  {
+    if (generation == this->parserGeneration)
+      this->updateParserItemModel();
+  });
+  connect(this->parser.get(), &parser::Parser::streamInfoUpdated, this, [this, generation]
+  {
+    if (generation == this->parserGeneration && this->backgroundParserFuture.isFinished())
+      this->updateStreamInfo();
+  });
+  connect(this->parser.get(), &parser::Parser::backgroundParsingDone, this,
+          [this, generation](const QString &error)
+  {
+    if (generation == this->parserGeneration)
+      this->backgroundParsingDone(error);
+  });
 }
 
 void BitstreamAnalysisWidget::hideEvent(QHideEvent *event)
 {
   DEBUG_ANALYSIS("BitstreamAnalysisWidget::hideEvent");
-  this->stopAndDeleteParserBlocking();
+  if (!this->streamViewerVisible)
+    this->stopAndDeleteParserBlocking();
   QWidget::hideEvent(event);
 }
 
 void BitstreamAnalysisWidget::showEvent(QShowEvent *event)
 {
   DEBUG_ANALYSIS("BitstreamAnalysisWidget::showEvent");
-  this->restartParsingOfCurrentItem();
+  if (!this->parser)
+    this->restartParsingOfCurrentItem();
   QWidget::showEvent(event);
 }

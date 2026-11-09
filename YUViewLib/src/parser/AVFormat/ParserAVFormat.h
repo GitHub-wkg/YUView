@@ -103,6 +103,8 @@ private:
   QList<FFmpeg::AVRational> timeBaseAllStreams;
   StringVec                 shortStreamInfoAllStreams;
 
+  unsigned nalLengthSize{4};
+  bool lengthPrefixedNals{};
   int    videoStreamIndex{-1};
   double framerate{-1.0};
 };

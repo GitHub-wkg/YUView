@@ -30,12 +30,12 @@
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <QGuiApplication>
+#include <QApplication>
 #include <gtest/gtest.h>
 
 int main(int argc, char **argv)
 {
   testing::InitGoogleTest(&argc, argv);
-  QGuiApplication app(argc, argv);
+  QApplication app(argc, argv);
   return RUN_ALL_TESTS();
 }
