@@ -97,6 +97,11 @@ int StopWatch::getMsSinceCreation() const
 PlaybackController::PlaybackController()
 {
   this->ui.setupUi(this);
+  connect(ui.frameBrowser, &FrameBrowserWidget::frameSelected, this, [this](int frame)
+  {
+    pausePlayback();
+    setCurrentFrameAndUpdate(frame);
+  });
 
   if (is_Q_OS_MACOS)
     // There is a bug in Qt that significantly slows down drawing QSlider ticks on Mac
@@ -129,6 +134,8 @@ void PlaybackController::setSplitViews(splitViewWidget *primary, splitViewWidget
 void PlaybackController::setPlaylist(PlaylistTreeWidget *playlistWidget)
 {
   this->playlist = playlistWidget;
+  connect(playlistWidget, &PlaylistTreeWidget::itemAboutToBeDeleted,
+          ui.frameBrowser, &FrameBrowserWidget::itemAboutToBeDeleted);
 }
 
 void PlaybackController::pausePlayback()
@@ -414,6 +421,7 @@ void PlaybackController::currentSelectedItemsChanged(playlistItem *item1,
                    this->frameSlider->minimum(),
                    this->frameSlider->maximum());
   }
+  ui.frameBrowser->setItem(item1, currentFrameIdx);
 }
 
 void PlaybackController::selectionPropertiesChanged(bool redraw)
@@ -433,6 +441,7 @@ void PlaybackController::selectionPropertiesChanged(bool redraw)
     this->splitViewPrimary->update(false, true);
     this->splitViewSeparate->update(false, true);
   }
+  ui.frameBrowser->setItem(currentItem[0], currentFrameIdx);
 }
 
 void PlaybackController::updateSettings()
@@ -670,6 +679,7 @@ bool PlaybackController::setCurrentFrameAndUpdate(int frame, bool updateView)
 
   this->updateFrameSliderAndSpinBoxWithoutSignals(frame);
   this->currentFrameIdx = frame;
+  ui.frameBrowser->setCurrentFrame(frame);
 
   if (updateView)
   {

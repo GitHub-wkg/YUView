@@ -1,21 +1,22 @@
-#include "FrameBrowserDialog.h"
+#include "FrameBrowserWidget.h"
 
 #include <QAbstractScrollArea>
 #include <QCache>
-#include <QDialog>
 #include <QFutureWatcher>
 #include <QLabel>
 #include <QLoggingCategory>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QPixmap>
 #include <QScrollBar>
+#include <QShowEvent>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QtConcurrentRun>
 
 #include <cmath>
+#include <functional>
+#include <utility>
 
 #include <playlistitem/playlistItemWithVideo.h>
 
@@ -26,21 +27,20 @@ Q_LOGGING_CATEGORY(frameBrowserLog, "yuview.framebrowser", QtInfoMsg)
 constexpr int   cellWidth = 144;
 constexpr int   thumbnailCacheLimit = 96;
 const QSize     thumbnailSize(128, 72);
-const QSize     previewSize(720, 400);
 
 struct FramePreview
 {
   QSize  size;
   QImage thumbnail;
-  QImage image;
 };
 
 class FrameStrip : public QAbstractScrollArea
 {
 public:
-  FrameStrip(playlistItemWithVideo &item, QLabel &preview, QLabel &details)
-      : item(item), preview(preview), details(details), properties(item.properties()),
-        selectedFrame(properties.startEndRange.first)
+  FrameStrip(playlistItemWithVideo &item, QLabel &details, int frame,
+             std::function<void(int)> selectFrame)
+      : item(item), details(details), properties(item.properties()),
+        selectFrame(std::move(selectFrame)), selectedFrame(frame)
   {
     setFixedHeight(118);
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -62,9 +62,31 @@ public:
     refresh.start();
   }
 
+  bool hasProperties(const playlistItem::Properties &current) const
+  {
+    return properties.startEndRange == current.startEndRange &&
+           properties.frameRate == current.frameRate;
+  }
+
+  void setCurrentFrame(int frame)
+  {
+    if (frame < properties.startEndRange.first || frame > properties.startEndRange.second)
+      return;
+    selectedFrame = frame;
+    if (frame < firstVisibleFrame())
+      horizontalScrollBar()->setValue(frame - properties.startEndRange.first);
+    else if (frame > lastVisibleFrame())
+      horizontalScrollBar()->setValue(frame - properties.startEndRange.first
+                                     - horizontalScrollBar()->pageStep() + 1);
+    showSelection();
+    viewport()->update();
+    if (!refresh.isActive())
+      refresh.start();
+  }
+
   ~FrameStrip() override
   {
-    // The background request borrows the playlist item for the duration of the dialog.
+    // The background request borrows the playlist item until the strip has stopped loading.
     if (loader.isRunning())
     {
       try
@@ -79,6 +101,13 @@ public:
   }
 
 protected:
+  void showEvent(QShowEvent *event) override
+  {
+    QAbstractScrollArea::showEvent(event);
+    setCurrentFrame(selectedFrame);
+    refresh.start();
+  }
+
   void paintEvent(QPaintEvent *) override
   {
     QPainter painter(viewport());
@@ -95,11 +124,11 @@ protected:
       QRect thumbnailRect(cell.x() + (cellWidth - thumbnailSize.width()) / 2,
                           5, thumbnailSize.width(), thumbnailSize.height());
       const auto thumbnail = thumbnails.object(frame);
-      if (thumbnail && !thumbnail->isNull())
+      if (thumbnail && !thumbnail->thumbnail.isNull())
       {
-        auto imageRect = QRect(QPoint(), thumbnail->size());
+        auto imageRect = QRect(QPoint(), thumbnail->thumbnail.size());
         imageRect.moveCenter(thumbnailRect.center());
-        painter.drawImage(imageRect, *thumbnail);
+        painter.drawImage(imageRect, thumbnail->thumbnail);
       }
       else
       {
@@ -145,15 +174,11 @@ protected:
     if (event->button() != Qt::LeftButton)
       return;
     const auto frame = firstVisibleFrame() + int(event->position().x()) / cellWidth;
-    if (frame > lastVisibleFrame() || frame == selectedFrame)
+    if (frame > lastVisibleFrame())
       return;
 
-    selectedFrame = frame;
-    selectedPreview = {};
-    selectionLoaded = false;
-    showSelection();
-    viewport()->update();
-    refresh.start();
+    qCDebug(frameBrowserLog) << "Selecting playback frame" << frame;
+    selectFrame(frame);
   }
 
 private:
@@ -174,7 +199,7 @@ private:
       return;
 
     int frame = -1;
-    const bool loadSelection = !selectionLoaded;
+    const bool loadSelection = !thumbnails.contains(selectedFrame);
     if (loadSelection)
       frame = selectedFrame;
     else
@@ -192,7 +217,7 @@ private:
 
     loadingFrame = frame;
     qCDebug(frameBrowserLog) << "Requesting frame" << frame << "preview" << loadSelection;
-    loader.setFuture(QtConcurrent::run([source = &item, frame, loadSelection]
+    loader.setFuture(QtConcurrent::run([source = &item, frame]
     {
       const auto image = source->loadFramePreview(frame);
       if (image.isNull())
@@ -201,8 +226,6 @@ private:
       FramePreview result;
       result.size = image.size();
       result.thumbnail = image.scaled(thumbnailSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-      if (loadSelection)
-        result.image = image.scaled(previewSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
       return result;
     }));
   }
@@ -219,13 +242,9 @@ private:
       qCWarning(frameBrowserLog) << "Unable to load frame" << loadingFrame;
     }
 
-    thumbnails.insert(loadingFrame, new QImage(result.thumbnail));
-    if (loadingFrame == selectedFrame && (!result.image.isNull() || result.thumbnail.isNull()))
-    {
-      selectedPreview = result;
-      selectionLoaded = true;
+    thumbnails.insert(loadingFrame, new FramePreview(result));
+    if (loadingFrame == selectedFrame)
       showSelection();
-    }
 
     loadingFrame = -1;
     viewport()->update();
@@ -235,12 +254,8 @@ private:
 
   void showSelection()
   {
-    if (selectedPreview.image.isNull())
-      preview.setText(selectionLoaded ? tr("Frame unavailable") : tr("Loading frame…"));
-    else
-      preview.setPixmap(QPixmap::fromImage(selectedPreview.image));
-
-    const auto size = selectedPreview.size;
+    const auto selected = thumbnails.object(selectedFrame);
+    const auto size = selected ? selected->size : QSize();
     const auto resolution = size.isValid()
       ? tr("%1 × %2").arg(size.width()).arg(size.height())
       : tr("Unavailable");
@@ -253,31 +268,67 @@ private:
   }
 
   playlistItemWithVideo          &item;
-  QLabel                        &preview;
   QLabel                        &details;
   const playlistItem::Properties properties;
-  QCache<int, QImage>             thumbnails{thumbnailCacheLimit};
+  std::function<void(int)>        selectFrame;
+  QCache<int, FramePreview>       thumbnails{thumbnailCacheLimit};
   QTimer                          refresh;
   QFutureWatcher<FramePreview>    loader;
-  FramePreview                    selectedPreview;
   int                             selectedFrame;
   int                             loadingFrame{-1};
-  bool                            selectionLoaded{};
 };
 }
 
-void showFrameBrowser(playlistItemWithVideo &item, QWidget *parent)
+FrameBrowserWidget::FrameBrowserWidget(QWidget *parent) : QWidget(parent)
 {
-  QDialog dialog(parent);
-  dialog.setWindowTitle(QObject::tr("Frame Browser – %1").arg(item.properties().name));
-  auto layout = new QVBoxLayout(&dialog);
-  auto preview = new QLabel(&dialog);
-  preview->setAlignment(Qt::AlignCenter);
-  preview->setMinimumSize(previewSize);
-  auto details = new QLabel(&dialog);
-  layout->addWidget(preview, 1);
+  auto layout = new QVBoxLayout(this);
+  layout->setContentsMargins(0, 0, 0, 0);
+  details = new QLabel(this);
   layout->addWidget(details);
-  layout->addWidget(new FrameStrip(item, *preview, *details));
-  dialog.resize(920, 600);
-  dialog.exec();
+  hide();
+}
+
+void FrameBrowserWidget::setItem(playlistItem *source, int frame)
+{
+  auto video = dynamic_cast<playlistItemWithVideo *>(source);
+  if (video && source == item && strip && video->isCachable() &&
+      static_cast<FrameStrip *>(strip)->hasProperties(video->properties()))
+  {
+    setCurrentFrame(frame);
+    return;
+  }
+
+  // Stop the old request before the playlist can release or change its source.
+  delete strip;
+  strip = nullptr;
+  item = nullptr;
+  hide();
+  if (!video)
+    return;
+
+  const auto properties = video->properties();
+  if (!properties.isFileSource || !properties.isIndexedByFrame() || !video->isCachable() ||
+      properties.startEndRange.first < 0 ||
+      properties.startEndRange.second < properties.startEndRange.first)
+    return;
+
+  item = source;
+  qCDebug(frameBrowserLog) << "Browsing playback item" << properties.name;
+  strip = new FrameStrip(*video, *details,
+                        qBound(properties.startEndRange.first, frame, properties.startEndRange.second),
+                        [this](int selectedFrame) { emit frameSelected(selectedFrame); });
+  static_cast<QVBoxLayout *>(layout())->insertWidget(0, strip);
+  show();
+}
+
+void FrameBrowserWidget::setCurrentFrame(int frame)
+{
+  if (strip)
+    static_cast<FrameStrip *>(strip)->setCurrentFrame(frame);
+}
+
+void FrameBrowserWidget::itemAboutToBeDeleted(playlistItem *source)
+{
+  if (source == item)
+    setItem(nullptr, -1);
 }

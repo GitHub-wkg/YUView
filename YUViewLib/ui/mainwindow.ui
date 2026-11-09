@@ -198,12 +198,6 @@
      <height>50</height>
     </size>
    </property>
-   <property name="maximumSize">
-    <size>
-     <width>524287</width>
-     <height>50</height>
-    </size>
-   </property>
    <property name="floating">
     <bool>false</bool>
    </property>

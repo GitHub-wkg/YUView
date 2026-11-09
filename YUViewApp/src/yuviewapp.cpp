@@ -30,13 +30,18 @@
 *   along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include "CrashHandler.h"
+
 #include <QCoreApplication>
+
+#include <exception>
 
 #include <common/Typedef.h>
 #include <ui/YUViewApplication.h>
 
 int main(int argc, char *argv[])
 {
+  crashHandler::initialize();
 #if QT_VERSION >= QT_VERSION_CHECK(5, 6, 0) && QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
   QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling); // DPI support
   QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps); // DPI support
@@ -46,7 +51,14 @@ int main(int argc, char *argv[])
 
   qRegisterMetaType<recacheIndicator>("recacheIndicator");
   
-  YUViewApplication app(argc, argv);
-
-  return app.returnCode;
+  try
+  {
+    YUViewApplication app(argc, argv);
+    return app.returnCode;
+  }
+  catch (...)
+  {
+    // Keep the active C++ exception available to the crash logger on MSVC as well.
+    std::terminate();
+  }
 }

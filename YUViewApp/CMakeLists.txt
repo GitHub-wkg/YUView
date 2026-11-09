@@ -6,6 +6,11 @@ else()
   add_executable(YUView src/yuviewapp.cpp)
 endif()
 
+target_sources(YUView PRIVATE
+  src/CrashHandler.cpp src/CrashHandler.h
+  src/NativeCrashHandler.cpp src/NativeCrashHandler.h
+)
+
 set_target_properties(YUView PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/YUViewApp"
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/YUViewApp"
@@ -13,6 +18,7 @@ set_target_properties(YUView PROPERTIES
 target_link_libraries(YUView PRIVATE YUViewLib)
 
 if(WIN32)
+  target_link_libraries(YUView PRIVATE Dbghelp)
   target_sources(YUView PRIVATE images/WindowsAppIcon.rc)
   target_include_directories(YUView PRIVATE images)
 elseif(APPLE)

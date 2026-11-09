@@ -46,7 +46,6 @@
 #include <playlistitem/playlistItems.h>
 #include <ui/Mainwindow_performanceTestDialog.h>
 #include <ui/SettingsDialog.h>
-#include <ui/widgets/FrameBrowserDialog.h>
 #include <ui/widgets/PlaylistTreeWidget.h>
 
 MainWindow::MainWindow(bool useAlternativeSources, QWidget *parent) : QMainWindow(parent)
@@ -298,21 +297,6 @@ void MainWindow::createMenusAndActions()
   QObject::connect(backSpaceDelete, &QShortcut::activated, this, &MainWindow::deleteSelectedItems);
 
   auto viewMenu = menuBar()->addMenu(tr("&View"));
-  viewMenu->addAction(tr("Frame Browser..."), this, [this]
-  {
-    auto item = dynamic_cast<playlistItemWithVideo *>(ui.playlistTreeWidget->getSelectedItems()[0]);
-    if (!item || !item->properties().isFileSource || !item->properties().isIndexedByFrame() ||
-        !item->isCachable() || item->properties().startEndRange.first < 0 ||
-        item->properties().startEndRange.second < item->properties().startEndRange.first)
-    {
-      QMessageBox::information(this, tr("Frame Browser"), tr("Select a decodable video file."));
-      return;
-    }
-
-    ui.playbackController->pausePlayback();
-    showFrameBrowser(*item, this);
-  });
-  viewMenu->addSeparator();
   // Sub menu save/load state
   auto saveStateMenu = viewMenu->addMenu("Save View State");
   addActionToMenu(saveStateMenu,
